@@ -1,0 +1,33 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# NAV cache database (regenerated from AMFI)
+server/data/
+
+# Personal broker exports and local notes (never commit: contain name/PAN)
+sample.csv
+sample_taxable.csv
+Mutual_Funds_Order_History*.xlsx
+gemini-code-*.md
