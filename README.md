@@ -51,6 +51,18 @@ them onto the page. They're synthetic Groww exports built from real historical N
 | `6-losses-and-loss-harvesting.csv` | Loss carried forward (FY 2024-25) and loss-harvest ideas (fetch NAVs) |
 | `7-messy-export-needs-review.csv` | Other column names, dd/mm/yyyy, SIP/SWP/switches, unknown funds, bad rows |
 
+These files are built to make the **Tax planner** show real savings. Upload one, click **Fetch live NAVs** on the
+Funds & holdings tab, then open the Tax planner. The planner uses today's NAVs, so the amounts move a little each day
+(figures below were checked on 12 Oct 2026):
+
+| File | What the Tax planner shows |
+|---|---|
+| `8-planner-gain-harvesting.csv` | Gain harvesting: book ₹1,25,000 of LTCG tax-free, ~₹16,250 future tax avoided |
+| `9-planner-loss-harvest-stcg.csv` | Loss harvesting against short-term gains taxed at 20%: one sale saves ~₹9,775 |
+| `10-planner-over-limit-loss-harvest.csv` | Loss harvesting after LTCG above the ₹1.25L limit (12.5%): one sale saves ~₹6,187 |
+| `11-planner-wait-and-save.csv` | Wait and save: a gold lot turning long-term in weeks; waiting saves ~₹31,281 |
+| `12-planner-all-in-one.xlsx` | Excel upload with all three panels: harvest plan, loss harvesting, wait and save |
+
 ## NAV cache server (`server/`)
 
 The server is a small HTTP API over **public AMFI data**. It has zero npm dependencies: it uses Node's built-in `http`,
