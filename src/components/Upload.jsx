@@ -1,8 +1,45 @@
 import { useState } from 'react';
 
-const ACCEPT = '.csv,.xlsx,.xls';
+const ACCEPT = '.csv,.xlsx,.xls,.pdf';
 
-export default function Upload({ engine, error, onFile }) {
+// CAS PDFs are password-protected (usually the PAN). The password goes straight to the worker.
+function PasswordPrompt({ file, error, onSubmit, onCancel }) {
+  const [password, setPassword] = useState('');
+  return (
+    <form
+      className="panel password-prompt"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(password.trim());
+      }}
+    >
+      <div>
+        <h2>🔐 Unlock {file.name}</h2>
+        <p className="muted small">
+          CAS statements from CAMS, KFintech and MF Central are protected with a password, usually your PAN in capital letters.
+          It's used only inside this tab to open the PDF and is never stored or sent anywhere. Leave it empty if the PDF has no password.
+        </p>
+      </div>
+      <input
+        className="input"
+        type="password"
+        autoComplete="off"
+        autoFocus
+        placeholder="e.g. ABCDE1234F"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        aria-label="PDF password"
+      />
+      {error && <p className="neg small">{error}</p>}
+      <div className="password-actions">
+        <button className="btn" type="submit">Open statement</button>
+        <button className="btn btn-ghost" type="button" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+export default function Upload({ engine, error, onFile, pendingPdf, passwordError, onPassword, onCancelPdf }) {
   const [drag, setDrag] = useState(false);
 
   const pick = (files) => {
@@ -43,7 +80,7 @@ export default function Upload({ engine, error, onFile }) {
           </svg>
         </div>
         <h2>Drop your transaction file here</h2>
-        <p>CSV or Excel (.xlsx) order history from Groww</p>
+        <p>Groww order history (CSV or Excel), or a CAS PDF from CAMS, KFintech or MF Central</p>
         <div className="actions">
           <span className="btn btn-lg">Choose file</span>
         </div>
@@ -57,6 +94,8 @@ export default function Upload({ engine, error, onFile }) {
           }}
         />
       </label>
+
+      {pendingPdf && <PasswordPrompt key={pendingPdf.name + (passwordError ?? '')} file={pendingPdf} error={passwordError} onSubmit={onPassword} onCancel={onCancelPdf} />}
 
       <div style={{ textAlign: 'center' }}>
         <EngineStatus engine={engine} />
@@ -112,14 +151,15 @@ export function EngineStatus({ engine }) {
 const STEPS = [
   { id: 'runtime', label: 'Download Python runtime (WebAssembly)' },
   { id: 'pandas', label: 'Load pandas' },
-  { id: 'xlsx', label: 'Install Excel reader', xlsxOnly: true },
+  { id: 'xlsx', label: 'Install Excel reader', only: 'xlsx' },
+  { id: 'pdf', label: 'Install PDF reader', only: 'pdf' },
   { id: 'parse', label: 'Parse file and match lots FIFO' },
 ];
 
 export function Loading({ engine, kind, fileName }) {
-  const steps = STEPS.filter((s) => !s.xlsxOnly || kind === 'xlsx');
+  const steps = STEPS.filter((s) => !s.only || s.only === kind);
   const order = steps.map((s) => s.id);
-  const stage = engine.stage === 'ready' ? (kind === 'xlsx' ? 'xlsx' : 'parse') : engine.stage;
+  const stage = engine.stage === 'ready' ? (kind === 'xlsx' || kind === 'pdf' ? kind : 'parse') : engine.stage;
   const current = Math.max(order.indexOf(stage), 0);
   return (
     <div className="loading" role="status" aria-live="polite">

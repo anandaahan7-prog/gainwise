@@ -9,6 +9,7 @@ const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86_40
 export function createService(db, { log = console.log, historyTtlHours = 12 } = {}) {
   let index = buildIndex(db.allSchemes());
   let refreshing = null;
+  const upstream = { fetches: 0, notModified: 0 };
 
   const status = () => {
     const s = db.stats();
@@ -17,6 +18,8 @@ export function createService(db, { log = console.log, historyTtlHours = 12 } = 
       latestNavDate: s.latest,
       lastRefresh: db.getMeta('last_refresh'),
       lastRefreshError: db.getMeta('last_refresh_error'),
+      fetches: upstream.fetches,
+      notModified: upstream.notModified,
       fmv2018Loaded: db.getMeta('fmv2018_loaded') === '1',
     };
   };
@@ -28,7 +31,9 @@ export function createService(db, { log = console.log, historyTtlHours = 12 } = 
       const started = Date.now();
       try {
         const result = await fetchNavAll({ etag: db.getMeta('navall_etag'), lastModified: db.getMeta('navall_last_modified') });
+        upstream.fetches += 1;
         if (result.notModified) {
+          upstream.notModified += 1;
           log(`[refresh] NAVAll unchanged (304) in ${Date.now() - started} ms`);
         } else {
           db.upsertSchemes(result.rows);

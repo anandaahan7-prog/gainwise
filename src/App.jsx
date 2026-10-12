@@ -15,6 +15,8 @@ import { startNetLog, subscribeNetLog, getNetLog } from './lib/netlog';
 import { resolveClasses } from './lib/classify';
 import { buildModel } from './lib/portfolio';
 import { buildActions } from './lib/actions';
+import { taxDates, buildIcs } from './lib/calendar';
+import { downloadFile } from './lib/report';
 import { fetchNavs, fetchFmv2018 } from './lib/nav';
 import { shortFund } from './lib/format';
 import { usePersistentState } from './lib/storage';
@@ -37,11 +39,15 @@ export default function App() {
   const [fileName, setFileName] = useState('');
   const [fileKind, setFileKind] = useState('csv');
   const [error, setError] = useState(null);
+  const [pendingPdf, setPendingPdf] = useState(null);
+  const [passwordError, setPasswordError] = useState(null);
   const [raw, setRaw] = useState(null);
   const [navs, setNavs] = useState({});
   const [navStatus, setNavStatus] = useState({ loading: false, done: 0, total: 0, errors: {} });
   const [sims, setSims] = useState([]);
   const [fy, setFy] = useState(null);
+  // Losses brought forward from earlier ITRs, per financial year. In memory only (never stored).
+  const [bfLosses, setBfLosses] = useState({});
   const [view, setView] = useState('report');
   const [askOpen, setAskOpen] = useState(false);
   const [askMounted, setAskMounted] = useState(false);
@@ -59,24 +65,38 @@ export default function App() {
     else root.dataset.theme = theme;
   }, [theme]);
 
-  const handleFile = useCallback(async (file) => {
-    const kind = /\.xlsx?$/i.test(file.name) ? 'xlsx' : 'csv';
+  const handleFile = useCallback(async (file, password) => {
+    const kind = /\.pdf$/i.test(file.name) ? 'pdf' : /\.xlsx?$/i.test(file.name) ? 'xlsx' : 'csv';
+    if (kind === 'pdf' && password === undefined) {
+      // Ask for the CAS password first (it is never stored)
+      setPendingPdf(file);
+      setPasswordError(null);
+      setError(null);
+      return;
+    }
+    setPendingPdf(null);
     setFileName(file.name);
     setFileKind(kind);
     setError(null);
     setPhase('loading');
     try {
-      const data = await parseFile(await file.arrayBuffer(), kind);
+      const data = await parseFile(await file.arrayBuffer(), kind, password || null);
       if (!data.matches.length && !data.holdings.length) throw new Error('No purchase or redemption transactions were found in this file.');
       setRaw(data);
       setNavs({});
       setNavStatus({ loading: false, done: 0, total: 0, errors: {} });
       setSims([]);
       setFy(null);
+      setBfLosses({});
       setView('report');
       setPhase('results');
     } catch (e) {
-      setError(e.message);
+      if (e.message.startsWith('PASSWORD:')) {
+        setPendingPdf(file);
+        setPasswordError(e.message.replace(/^PASSWORD:\s*/, ''));
+      } else {
+        setError(e.message);
+      }
       setPhase('upload');
     }
   }, []);
@@ -90,10 +110,11 @@ export default function App() {
   };
 
   const classes = useMemo(() => (raw ? resolveClasses(raw.funds, overrides, navs) : {}), [raw, overrides, navs]);
-  const model = useMemo(() => (raw ? buildModel({ raw, classes, navs, sims, slab }) : null), [raw, classes, navs, sims, slab]);
+  const model = useMemo(() => (raw ? buildModel({ raw, classes, navs, sims, slab, bfLosses }) : null), [raw, classes, navs, sims, slab, bfLosses]);
   // Same data without what-if sales: the Save tax ideas are computed on this, so previews don't reshuffle them
-  const baseModel = useMemo(() => (raw ? buildModel({ raw, classes, navs, sims: [], slab }) : null), [raw, classes, navs, slab]);
+  const baseModel = useMemo(() => (raw ? buildModel({ raw, classes, navs, sims: [], slab, bfLosses }) : null), [raw, classes, navs, slab, bfLosses]);
   const plan = useMemo(() => (baseModel ? buildActions(baseModel) : null), [baseModel]);
+  const dates = useMemo(() => (baseModel && plan ? taxDates(baseModel, plan) : []), [baseModel, plan]);
 
   // Default to the most recent FY that actually has sales
   const latestFy = model ? model.realized.reduce((m, r) => Math.max(m, r.fy), -Infinity) : null;
@@ -189,7 +210,17 @@ export default function App() {
         requestCount={externalRequests}
       />
       <main className="container">
-        {phase === 'upload' && <Upload engine={engine} error={error} onFile={handleFile} />}
+        {phase === 'upload' && (
+          <Upload
+            engine={engine}
+            error={error}
+            onFile={handleFile}
+            pendingPdf={pendingPdf}
+            passwordError={passwordError}
+            onPassword={(pw) => handleFile(pendingPdf, pw)}
+            onCancelPdf={() => setPendingPdf(null)}
+          />
+        )}
         {phase === 'loading' && <Loading engine={engine} kind={fileKind} fileName={fileName} />}
         {phase === 'results' && model && (
           <>
@@ -211,7 +242,16 @@ export default function App() {
                     ))}
                   </select>
                 </label>
-                <DownloadMenu tax={tax} navs={navs} />
+                <DownloadMenu
+                  tax={tax}
+                  navs={navs}
+                  extraItems={[{
+                    label: 'Tax reminders (.ics)',
+                    hint: `${dates.length} upcoming date${dates.length === 1 ? '' : 's'} for your calendar`,
+                    disabled: !dates.length,
+                    onClick: () => downloadFile('gainwise-tax-dates.ics', buildIcs(dates), 'text/calendar;charset=utf-8'),
+                  }]}
+                />
                 <button className="btn btn-ghost" onClick={openAsk}>✦ Ask</button>
                 <button className="btn btn-ghost" onClick={reset}>New file</button>
               </div>
@@ -256,7 +296,16 @@ export default function App() {
             )}
 
             <div className="no-print">
-              {view === 'report' && <TaxReport model={model} tax={tax} fy={selectedFy} setFy={setFy} warnings={raw.warnings} goTo={setView} />}
+              {view === 'report' && <TaxReport
+                  model={model}
+                  tax={tax}
+                  fy={selectedFy}
+                  setFy={setFy}
+                  warnings={raw.warnings}
+                  goTo={setView}
+                  bf={bfLosses[selectedFy] ?? { st: 0, lt: 0 }}
+                  setBf={(v) => setBfLosses((all) => ({ ...all, [selectedFy]: v }))}
+                />}
               {view === 'portfolio' && (
                 <Portfolio
                   model={model}
@@ -270,7 +319,7 @@ export default function App() {
                   onAddSim={addSim}
                 />
               )}
-              {view === 'save' && <SaveTax plan={plan} baseModel={baseModel} model={model} sims={sims} setSims={setSims} navStatus={navStatus} />}
+              {view === 'save' && <SaveTax plan={plan} dates={dates} baseModel={baseModel} model={model} sims={sims} setSims={setSims} navStatus={navStatus} />}
             </div>
 
             <PrintReport model={model} tax={tax} />

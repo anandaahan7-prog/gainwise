@@ -9,7 +9,8 @@ const toCsv = (rows) => rows.map((r) => r.map(esc).join(',')).join('\n');
 const r2 = (v) => (v == null ? '' : v.toFixed(2));
 
 export function downloadFile(name, content, type = 'text/csv;charset=utf-8') {
-  const blob = new Blob(['﻿', content], { type });
+  // A byte-order mark makes Excel read ₹ correctly in CSVs; calendar files must not have one
+  const blob = new Blob(type.startsWith('text/csv') ? ['﻿', content] : [content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

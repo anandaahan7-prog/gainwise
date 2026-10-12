@@ -47,11 +47,13 @@ export function buildInsights(model, tax) {
     });
   }
 
-  if (tax.carryForward.st > 1 || tax.carryForward.lt > 1) {
+  const leftSt = tax.carryForward.st + (tax.broughtForward?.left.st ?? 0);
+  const leftLt = tax.carryForward.lt + (tax.broughtForward?.left.lt ?? 0);
+  if (leftSt > 1 || leftLt > 1) {
     out.push({
       tone: 'info',
       title: 'Losses to carry forward',
-      body: `${inr(tax.carryForward.st)} short-term and ${inr(tax.carryForward.lt)} long-term losses remain. File your ITR on time to use them in the next 8 years.`,
+      body: `${inr(leftSt)} short-term and ${inr(leftLt)} long-term losses remain${tax.broughtForward?.used >= 1 ? ` (after using ${inr(tax.broughtForward.used)} brought forward)` : ''}. File your ITR on time to keep them for up to 8 years.`,
     });
   }
 

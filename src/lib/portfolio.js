@@ -1,4 +1,4 @@
-import { enrich, treatment, computeTax, grandfatheredNav, GRANDFATHER_CUTOFF } from './tax';
+import { enrich, treatment, computeTax, grandfatheredNav, GRANDFATHER_CUTOFF, isElss, elssUnlockDate } from './tax';
 import { fyOf, daysBetween, todayISO } from './dates';
 
 const byFundThenDate = (a, b) => a.fund.localeCompare(b.fund) || a.buyDate.localeCompare(b.buyDate);
@@ -36,10 +36,11 @@ export function applySales(holdings, sales) {
 }
 
 // Everything the screens need, derived from the engine output + user choices
-export function buildModel({ raw, classes, navs, sims, slab }) {
+export function buildModel({ raw, classes, navs, sims, slab, bfLosses = {} }) {
   const today = todayISO();
   const currentFy = fyOf(today);
   const clsOf = (fund) => classes[fund]?.cls ?? 'Unknown';
+  const elss = (fund) => isElss(fund, navs[fund]?.category);
   const fmvOf = (fund) => navs[fund]?.fmv2018 ?? null;
   const enrichMatch = (m) => enrich(m, clsOf(m.fund), fmvOf(m.fund));
 
@@ -47,15 +48,18 @@ export function buildModel({ raw, classes, navs, sims, slab }) {
   const sim = applySales(raw.holdings, sims);
   const simulated = sim.matches.map(enrichMatch);
 
-  const fySet = new Set(realized.map((r) => r.fy));
+  const fySet = new Set([...realized, ...simulated].map((r) => r.fy));
   fySet.add(currentFy);
   const fys = [...fySet].sort((a, b) => b - a);
 
   const recordsFor = (fy, { withSims = true } = {}) => [
     ...realized.filter((r) => r.fy === fy),
-    ...(withSims && fy === currentFy ? simulated : []),
+    // What-if sales count in the financial year of their sale date
+    ...(withSims ? simulated.filter((r) => r.fy === fy) : []),
   ];
-  const taxFor = (fy, opts) => computeTax(recordsFor(fy, opts), fy, slab);
+  // Every tax computation goes through here so brought-forward losses are always applied
+  const computeTaxFor = (records, fy) => computeTax(records, fy, slab, bfLosses[fy]);
+  const taxFor = (fy, opts) => computeTaxFor(recordsFor(fy, opts), fy);
 
   const lots = sim.holdings.map((lot) => {
     const cls = clsOf(lot.fund);
@@ -66,8 +70,11 @@ export function buildModel({ raw, classes, navs, sims, slab }) {
     // Per-unit cost the taxman would use if this lot were sold today (grandfathered for pre-2018 equity)
     const fmv = cls === 'Equity' && lot.buyDate < GRANDFATHER_CUTOFF ? fmvOf(lot.fund) : null;
     const basisNav = fmv && nav != null ? grandfatheredNav(lot.buyNav, fmv, nav) : lot.buyNav;
+    const unlocks = elss(lot.fund) ? elssUnlockDate(lot.buyDate) : null;
     return {
       ...lot,
+      locked: !!unlocks && today < unlocks,
+      unlocks: unlocks && today < unlocks ? unlocks : null,
       fmv2018: fmv,
       basisNav,
       assetClass: cls,
@@ -109,6 +116,9 @@ export function buildModel({ raw, classes, navs, sims, slab }) {
       value: hasNav ? sum('value') : null,
       gain: hasNav ? sum('gain') : null,
       ltUnits: fundLots.filter((l) => l.term === 'LT').reduce((a, l) => a + l.units, 0),
+      elss: elss(name),
+      lockedUnits: fundLots.filter((l) => l.locked).reduce((a, l) => a + l.units, 0),
+      nextUnlock: fundLots.filter((l) => l.locked).map((l) => l.unlocks).sort()[0] ?? null,
       nextLt: fundLots.filter((l) => l.ltFrom).sort((a, b) => a.ltFrom.localeCompare(b.ltFrom))[0]?.ltFrom ?? null,
       nav: navs[name] ?? null,
       realizedGain: realized.filter((r) => r.fund === name).reduce((a, r) => a + r.gain, 0),
@@ -119,7 +129,7 @@ export function buildModel({ raw, classes, navs, sims, slab }) {
   const needsFmv = [...new Set([...raw.matches, ...raw.holdings].filter((x) => x.buyDate < GRANDFATHER_CUTOFF).map((x) => x.fund))]
     .filter((f) => clsOf(f) === 'Equity');
 
-  return { today, currentFy, realized, simulated, fys, recordsFor, taxFor, lots, funds, slab, clsOf, enrichMatch, needsFmv, transactions: raw.transactions };
+  return { today, currentFy, realized, simulated, fys, recordsFor, taxFor, computeTaxFor, bfLosses, lots, funds, slab, clsOf, enrichMatch, needsFmv, transactions: raw.transactions };
 }
 
 // Group lot-level records into one row per sell transaction (for tables)

@@ -227,6 +227,9 @@ export default function Portfolio({ model, navStatus, autoNav, setAutoNav, onFet
                         {isHeld && <span className={`caret ${isOpen ? 'open' : ''}`}>▶</span>}
                         {shortFund(f.name)}
                         <div className="muted small">{isHeld ? `${units(f.units)} units` : 'fully sold'}{f.nav?.nav ? ` · NAV ${inr(f.nav.nav, { paise: true })}` : ''}</div>
+                        {f.lockedUnits > 1e-6 && (
+                          <div className="lock-note">🔒 ELSS: {units(f.lockedUnits)} units locked · next unlock {formatDate(f.nextUnlock)}</div>
+                        )}
                       </td>
                       <td>
                         <select
@@ -303,6 +306,7 @@ export default function Portfolio({ model, navStatus, autoNav, setAutoNav, onFet
                               Bought {formatDate(l.buyDate)} @ {inr(l.buyNav, { paise: true })}
                               <div className="muted small">
                                 held {l.ageDays} days{l.deemed ? ' · always slab rate (Sec 50AA)' : ''}
+                                {l.locked ? ` · 🔒 locked until ${formatDate(l.unlocks)}` : ''}
                                 {l.fmv2018 ? ` · 2018 NAV ${inr(l.fmv2018, { paise: true })}` : ''}
                               </div>
                             </td>

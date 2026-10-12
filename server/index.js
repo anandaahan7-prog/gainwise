@@ -9,6 +9,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { openDb } from './db.js';
 import { createService } from './service.js';
+import { createMetrics } from './metrics.js';
 
 const config = {
   port: Number(process.env.PORT ?? 8787),
@@ -51,12 +52,14 @@ function send(req, res, status, data, { maxAge = 0 } = {}) {
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': maxAge === 'revalidate' ? 'no-cache' : maxAge ? `public, max-age=${maxAge}` : 'no-store',
   };
+  const rawBytes = body.length;
   if (status === 200 && req.method === 'GET') {
     // Conditional requests: identical responses cost the client only a 304
     const etag = `W/"${createHash('sha1').update(body).digest('base64url')}"`;
     headers.ETag = etag;
     if (req.headers['if-none-match'] === etag) {
       res.writeHead(304, headers);
+      res.gw = { bytes: 0, rawBytes };
       return res.end();
     }
   }
@@ -67,6 +70,7 @@ function send(req, res, status, data, { maxAge = 0 } = {}) {
   }
   headers['Content-Length'] = body.length;
   res.writeHead(status, headers);
+  res.gw = { bytes: body.length, rawBytes };
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
@@ -130,6 +134,8 @@ const namesBody = (body, max = 50) => {
 // Routes
 // ---------------------------------------------------------------------------
 const db = openDb(config.dbFile);
+const metrics = createMetrics();
+const STATUS_PAGE = readFileSync(fileURLToPath(new URL('./status.html', import.meta.url)));
 const service = createService(db, { log });
 const startedAt = Date.now();
 
@@ -139,6 +145,7 @@ const requireData = () => {
 
 const routes = [
   ['GET', /^\/api\/health$/, () => [200, { ok: true, uptimeSeconds: Math.round((Date.now() - startedAt) / 1000), ...service.status() }]],
+  ['GET', /^\/api\/metrics$/, () => [200, { http: metrics.snapshot(), upstream: service.status() }]],
   ['GET', /^\/api\/schemes\/search$/, (req, url) => {
     requireData();
     const q = url.searchParams.get('q')?.trim();
@@ -212,6 +219,12 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   let status = 500;
   try {
+    if (url.pathname === '/status' && req.method === 'GET') {
+      // Live monitoring page (polls /api/metrics)
+      status = 200;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': STATUS_PAGE.length, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(STATUS_PAGE);
+    }
     if (!url.pathname.startsWith('/api/') && (req.method === 'GET' || req.method === 'HEAD')) {
       if (serveStatic(req, res, url.pathname)) {
         status = 200;
@@ -239,7 +252,13 @@ const server = createServer(async (req, res) => {
     send(req, res, status, { error: status === 500 ? 'Internal server error' : e.message });
   } finally {
     // Path and status only — never bodies (they contain fund names) or client IPs
-    log(`${req.method} ${url.pathname} ${status} ${(performance.now() - t0).toFixed(1)}ms`);
+    const ms = performance.now() - t0;
+    const code = res.statusCode || status;
+    if (url.pathname !== '/api/metrics' && url.pathname !== '/status') {
+      const route = url.pathname.startsWith('/api/') ? url.pathname.replace(/\/\d+/g, '/:code') : 'static files';
+      metrics.record({ method: req.method, route: `${req.method} ${route}`, path: url.pathname, code, ms, bytes: res.gw?.bytes ?? 0, rawBytes: res.gw?.rawBytes ?? 0 });
+    }
+    log(`${req.method} ${url.pathname} ${code} ${ms.toFixed(1)}ms`);
   }
 });
 

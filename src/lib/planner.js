@@ -1,13 +1,13 @@
 // Tax planning for the current financial year: gain harvesting, loss harvesting, "wait and save".
 import { applySales } from './portfolio';
-import { computeTax, CESS } from './tax';
+import { CESS } from './tax';
 
 /** Tax effect of selling `sales` today, on top of everything already realized (and simulated) this FY. */
 export function taxDelta(model, sales) {
   const base = model.taxFor(model.currentFy);
   const { matches } = applySales(model.lots, sales.map((s) => ({ date: model.today, ...s })));
   const extra = matches.map(model.enrichMatch);
-  const after = computeTax([...base.records, ...extra], model.currentFy, model.slab);
+  const after = model.computeTaxFor([...base.records, ...extra], model.currentFy);
   return { base, after, delta: after.total - base.total, extra };
 }
 
@@ -30,7 +30,7 @@ export function gainHarvestPlan(model) {
       const segs = [];
       for (const lot of f.lots) {
         // Taxable gain per unit (grandfathered cost for pre-2018 units)
-        if (lot.term !== 'LT' || lot.nav <= lot.basisNav) break;
+        if (lot.locked || lot.term !== 'LT' || lot.nav <= lot.basisNav) break;
         segs.push({ units: lot.units, gpu: lot.nav - lot.basisNav });
       }
       const gain = segs.reduce((a, s) => a + s.units * s.gpu, 0);
@@ -79,12 +79,13 @@ export function gainHarvestPlan(model) {
 /** Funds whose full sale today would lower this year's tax (losses offsetting realized gains). */
 export function lossHarvestCandidates(model) {
   return model.funds
-    .filter((f) => f.nav && f.units > 0 && f.gain != null && f.gain < 0)
+    .filter((f) => f.nav && f.sellableUnits > 1e-6 && f.gain != null && f.gain < 0)
     .map((f) => {
-      const d = taxDelta(model, [{ id: `loss-${f.name}`, fund: f.name, units: f.units, nav: f.nav.nav }]);
+      // Only units that can be sold today (locked ELSS units are skipped)
+      const d = taxDelta(model, [{ id: `loss-${f.name}`, fund: f.name, units: f.sellableUnits, nav: f.nav.nav }]);
       const st = d.extra.filter((r) => r.term === 'ST').reduce((a, r) => a + r.gain, 0);
       const lt = d.extra.filter((r) => r.term === 'LT').reduce((a, r) => a + r.gain, 0);
-      return { fund: f.name, units: f.units, value: f.value, gain: f.gain, st, lt, saving: -d.delta };
+      return { fund: f.name, units: f.sellableUnits, value: f.sellableUnits * f.nav.nav, gain: st + lt, st, lt, saving: -d.delta };
     })
     .filter((c) => c.saving > 1)
     .sort((a, b) => b.saving - a.saving);
@@ -93,7 +94,7 @@ export function lossHarvestCandidates(model) {
 /** Lots in profit that turn long-term within a year: selling before that date costs extra tax. */
 export function waitAndSave(model, horizonDays = 366) {
   return model.lots
-    .filter((l) => l.term === 'ST' && l.ltFrom && l.daysToLt > 0 && l.daysToLt <= horizonDays && l.gain > 0)
+    .filter((l) => !l.locked && l.term === 'ST' && l.ltFrom && l.daysToLt > 0 && l.daysToLt <= horizonDays && l.gain > 0)
     .map((l) => {
       const stRate = l.assetClass === 'Equity' ? 0.2 : model.slab;
       const saving = l.gain * (stRate - 0.125) * (1 + CESS);

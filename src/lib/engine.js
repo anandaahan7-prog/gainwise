@@ -47,11 +47,11 @@ export function subscribeEngine(fn) {
   return () => listeners.delete(fn);
 }
 
-export function parseFile(buffer, kind) {
+export function parseFile(buffer, kind, password = null) {
   startEngine();
   if (state.bootError) return Promise.reject(new Error(state.bootError));
   return new Promise((resolve, reject) => {
     pending = { resolve, reject };
-    worker.postMessage({ type: 'parse', kind, buffer }, [buffer]);
+    worker.postMessage({ type: 'parse', kind, buffer, password }, [buffer]);
   });
 }

@@ -40,6 +40,10 @@ export const headColor = (key) => `var(--series-${HEAD_ORDER.indexOf(key) + 1})`
 
 export const exemptionLimit = (fyStart) => (fyStart >= 2024 ? 125000 : 100000);
 
+// ELSS units can't be redeemed for 3 years from allotment (Sec 80C lock-in)
+export const isElss = (name, category) => /elss/i.test(category ?? '') || /\belss\b|tax\s*saver/i.test(name);
+export const elssUnlockDate = (buyISO) => addMonths(buyISO, 36);
+
 // First date on which a lot bought on buyISO counts as "held for more than N months"
 const longTermFrom = (buyISO, months) => addDays(addMonths(buyISO, months), 1);
 
@@ -104,8 +108,10 @@ const headRate = (key, slab) => (key === 'SLAB_ST' ? slab : HEADS[key].rate);
  *  - long-term losses can only absorb long-term gains
  * Losses are applied to the most expensive heads first; equity LTCG is absorbed
  * last because its first ₹1–1.25L is exempt anyway.
+ * `broughtForward` = losses carried in from earlier years' ITRs (Sec 74), set off after
+ * this year's own losses with the same rules.
  */
-export function computeTax(records, fyStart, slab) {
+export function computeTax(records, fyStart, slab, broughtForward = { st: 0, lt: 0 }) {
   const heads = {};
   for (const key of HEAD_ORDER) heads[key] = { key, gains: 0, losses: 0, net: 0, setOff: 0, exempt: 0 };
   let stcg = 0;
@@ -145,6 +151,12 @@ export function computeTax(records, fyStart, slab) {
   stLoss = absorb(stOrder, stLoss);
   stLoss = absorb(ltOrder, stLoss);
 
+  const bfSt = Math.max(0, broughtForward.st || 0);
+  const bfLt = Math.max(0, broughtForward.lt || 0);
+  const bfLtLeft = absorb(ltOrder, bfLt);
+  let bfStLeft = absorb(stOrder, bfSt);
+  bfStLeft = absorb(ltOrder, bfStLeft);
+
   const limit = exemptionLimit(fyStart);
   const equityLT = heads.EQ_LT_POST.net + heads.EQ_LT_PRE.net;
   let room = limit;
@@ -177,6 +189,7 @@ export function computeTax(records, fyStart, slab) {
     cess,
     total: baseTax + cess,
     carryForward: { st: stLoss, lt: ltLoss },
+    broughtForward: { st: bfSt, lt: bfLt, used: bfSt - bfStLeft + (bfLt - bfLtLeft), left: { st: bfStLeft, lt: bfLtLeft } },
     records,
   };
 }

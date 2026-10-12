@@ -9,7 +9,10 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "server": "node --disable-warning=ExperimentalWarning server/index.js",
-    "server:watch": "node --watch --disable-warning=ExperimentalWarning server/index.js"
+    "server:watch": "node --watch --disable-warning=ExperimentalWarning server/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:engine": "python -m pytest tests/engine -q"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.85",
@@ -21,7 +24,8 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.2"
   },
   "engines": {
     "node": ">=22.13"

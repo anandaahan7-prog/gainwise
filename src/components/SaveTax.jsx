@@ -1,8 +1,14 @@
 import { useMemo, useState } from 'react';
 import { inr, units, shortFund, signClass } from '../lib/format';
-import { fyLabel } from '../lib/dates';
+import { fyLabel, formatDate, daysBetween } from '../lib/dates';
+import { buildIcs } from '../lib/calendar';
+import { downloadFile } from '../lib/report';
+import Withdraw from './Withdraw';
 
-function ActionCard({ action, previewing, onPreview, rank }) {
+const DATE_ICON = { 'long-term': '⏳', deadline: '🌱', 'advance-tax': '🏦', elss: '🔓' };
+const saveIcs = (name, events) => downloadFile(name, buildIcs(events), 'text/calendar;charset=utf-8');
+
+function ActionCard({ action, previewing, onPreview, rank, events }) {
   const [open, setOpen] = useState(false);
   return (
     <article className={`action ${action.kind} ${previewing ? 'previewing' : ''}`}>
@@ -16,6 +22,11 @@ function ActionCard({ action, previewing, onPreview, rank }) {
           {action.sales && (
             <button className={`btn btn-sm ${previewing ? 'btn-ghost' : ''}`} onClick={onPreview}>
               {previewing ? 'Undo preview' : 'Preview'}
+            </button>
+          )}
+          {events?.length > 0 && (
+            <button className="btn btn-ghost btn-sm" onClick={() => saveIcs('gainwise-reminder.ics', events)}>
+              📅 Remind me
             </button>
           )}
           <button className="link-btn small" onClick={() => setOpen((o) => !o)}>
@@ -46,7 +57,7 @@ function ActionCard({ action, previewing, onPreview, rank }) {
   );
 }
 
-export default function SaveTax({ plan, baseModel, model, sims, setSims, navStatus }) {
+export default function SaveTax({ plan, dates, baseModel, model, sims, setSims, navStatus }) {
   const { actions, total, missingNav } = plan;
   const before = useMemo(() => baseModel.taxFor(baseModel.currentFy), [baseModel]);
   const after = useMemo(() => model.taxFor(model.currentFy), [model]);
@@ -107,6 +118,18 @@ export default function SaveTax({ plan, baseModel, model, sims, setSims, navStat
         </section>
       )}
 
+      <Withdraw
+        model={model}
+        previewing={sims.some((s) => s.action === 'withdraw')}
+        onUndo={() => setSims((list) => list.filter((s) => s.action !== 'withdraw'))}
+        onPreview={(sales, date) =>
+          setSims((list) => [
+            ...list.filter((s) => s.action !== 'withdraw'),
+            ...sales.map((x, i) => ({ id: `withdraw#${i}`, action: 'withdraw', date, fund: x.fund, units: x.units, nav: x.nav })),
+          ])
+        }
+      />
+
       {unpriced.length > 0 && (
         <div className="note info">
           <span className="note-icon">ℹ️</span>
@@ -120,7 +143,14 @@ export default function SaveTax({ plan, baseModel, model, sims, setSims, navStat
       {actions.length > 0 ? (
         <div className="actions">
           {actions.map((a, i) => (
-            <ActionCard key={a.id} rank={i + 1} action={a} previewing={isPreviewing(a)} onPreview={() => toggle(a)} />
+            <ActionCard
+              key={a.id}
+              rank={i + 1}
+              action={a}
+              previewing={isPreviewing(a)}
+              onPreview={() => toggle(a)}
+              events={a.kind === 'wait' ? dates.filter((d) => d.kind === 'long-term' && a.lots.some((l) => l.ltFrom === d.date && d.title.startsWith(shortFund(l.fund)))) : null}
+            />
           ))}
         </div>
       ) : (
@@ -131,6 +161,36 @@ export default function SaveTax({ plan, baseModel, model, sims, setSims, navStat
             No unused exemption to harvest{missingNav.length ? ' (some equity funds have no price yet)' : ''}, no losses that would
             cut this year's tax, and no profitable lots about to turn long-term. Check back before 31 March.
           </p>
+        </section>
+      )}
+
+      {dates.length > 0 && (
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>Upcoming tax dates</h2>
+              <p>Long-term dates, the 31 March deadline, advance-tax instalments and ELSS unlocks for {fyLabel(baseModel.currentFy)}.</p>
+            </div>
+            <button className="btn btn-ghost" onClick={() => saveIcs('gainwise-tax-dates.ics', dates)}>
+              📅 Add all to calendar
+            </button>
+          </div>
+          <ul className="dates">
+            {dates.map((d, i) => (
+              <li key={i}>
+                <span className="date-pill">
+                  <strong>{formatDate(d.date).slice(0, 6)}</strong>
+                  <span>{d.date.slice(0, 4)}</span>
+                </span>
+                <div>
+                  <strong>{DATE_ICON[d.kind]} {d.title}</strong>
+                  <p>{d.detail}</p>
+                </div>
+                <span className="muted small nowrap">in {daysBetween(baseModel.today, d.date)} days</span>
+              </li>
+            ))}
+          </ul>
+          <p className="muted small" style={{ marginTop: 10 }}>The .ics file opens in Google Calendar, Outlook or Apple Calendar. It's built in your browser; nothing is uploaded.</p>
         </section>
       )}
 

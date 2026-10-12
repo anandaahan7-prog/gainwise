@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GainWise NAV server · status</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f5f2; --card: #fff; --line: #e2e0d9; --text: #17161a; --muted: #6f6d75; --accent: #e85d00; --good: #0f8a5f; --bad: #d23c3c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0e0e10; --card: #18181b; --line: #2c2c31; --text: #f4f3f1; --muted: #9a98a0; --accent: #ff7a1a; --good: #34c38f; --bad: #f06a6a; } }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 14px/1.5 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); padding: 24px 16px; }
+  main { max-width: 1100px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+  .mark { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: #111; display: grid; place-items: center; font-weight: 800; }
+  h1 { font-size: 1.3rem; }
+  .live { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+  .live i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; animation: p 1.6s infinite; }
+  @keyframes p { 50% { opacity: 0.3; } }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .tile span { display: block; color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+  .tile strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+  .tile small { color: var(--muted); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; overflow-x: auto; }
+  h2 { font-size: 1rem; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  td.r, th.r { text-align: right; }
+  .c2 { color: var(--good); } .c3 { color: var(--accent); } .c4, .c5 { color: var(--bad); }
+  p.note { color: var(--muted); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="mark">₹</div>
+    <h1>GainWise NAV server</h1>
+    <span class="live"><i></i>live · refreshes every 3 s</span>
+  </header>
+  <div class="grid" id="tiles"></div>
+  <section><h2>Upstream: AMFI</h2><div class="grid" id="upstream" style="margin:0"></div></section>
+  <section><h2>Endpoints</h2><table><thead><tr><th>Route</th><th class="r">Requests</th><th class="r">Avg ms</th><th class="r">p95 ms</th><th class="r">5xx</th></tr></thead><tbody id="routes"></tbody></table></section>
+  <section><h2>Recent requests</h2><table><thead><tr><th>Time</th><th>Request</th><th class="r">Status</th><th class="r">ms</th><th class="r">Bytes</th></tr></thead><tbody id="recent"></tbody></table></section>
+  <p class="note">Only method, path, status, latency and size are recorded: no IP addresses, no request bodies.</p>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const kb = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B');
+  const dur = (s) => (s >= 86400 ? Math.floor(s / 86400) + 'd ' : '') + Math.floor((s % 86400) / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  const tile = (label, value, sub = '') => `<div class="tile"><span>${label}</span><strong>${value}</strong>${sub ? `<small> ${sub}</small>` : ''}</div>`;
+  async function load() {
+    try {
+      const m = await (await fetch('/api/metrics', { cache: 'no-store' })).json();
+      const h = m.http;
+      $('tiles').innerHTML = [
+        tile('Uptime', dur(h.uptimeSeconds)),
+        tile('Requests', h.requests.toLocaleString('en-IN'), `${h.perMinute}/min`),
+        tile('Latency p50 / p95', `${h.latencyMs.p50} / ${h.latencyMs.p95}`, 'ms'),
+        tile('304 Not Modified', h.notModified, h.requests ? `${Math.round((h.notModified / h.requests) * 100)}%` : ''),
+        tile('429 rate-limited', h.rateLimited),
+        tile('Sent (gzip)', kb(h.bytesSent), `${h.gzipSavedPct}% saved`),
+        tile('Errors (5xx)', h.status['5xx']),
+      ].join('');
+      const u = m.upstream;
+      $('upstream').innerHTML = [
+        tile('Schemes cached', u.schemes.toLocaleString('en-IN')),
+        tile('Latest NAV date', u.latestNavDate ?? '—'),
+        tile('Last refresh', u.lastRefresh ? new Date(u.lastRefresh).toLocaleTimeString() : '—'),
+        tile('AMFI fetches', u.fetches, `${u.notModified} × 304`),
+        tile('2018 NAVs loaded', u.fmv2018Loaded ? 'yes' : 'no'),
+      ].join('');
+      $('routes').innerHTML = h.routes.map((r) => `<tr><td>${esc(r.route)}</td><td class="r">${r.count}</td><td class="r">${r.avgMs}</td><td class="r">${r.p95Ms}</td><td class="r">${r.errors}</td></tr>`).join('');
+      $('recent').innerHTML = h.recent.map((r) => `<tr><td>${new Date(r.at).toLocaleTimeString()}</td><td>${esc(r.method)} ${esc(r.path)}</td><td class="r c${String(r.code)[0]}">${r.code}</td><td class="r">${r.ms}</td><td class="r">${kb(r.bytes)}</td></tr>`).join('');
+    } catch (e) {
+      $('tiles').innerHTML = tile('Server', 'unreachable', e.message);
+    }
+  }
+  load();
+  setInterval(load, 3000);
+</script>
+</body>
+</html>

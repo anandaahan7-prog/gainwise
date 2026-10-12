@@ -11,14 +11,15 @@ const NOTE_ICON = { good: '💡', info: 'ℹ️', warn: '⚠️', bad: '🔺' };
 // Gains → losses used → tax-free → taxable, then tax. Shows the whole computation in one picture.
 function Waterfall({ tax }) {
   const gains = tax.rows.reduce((a, r) => a + r.gains, 0);
-  const losses = tax.rows.reduce((a, r) => a + r.losses, 0) - tax.carryForward.st - tax.carryForward.lt;
+  const bfUsed = tax.broughtForward?.used ?? 0;
+  const losses = tax.rows.reduce((a, r) => a + r.losses, 0) - tax.carryForward.st - tax.carryForward.lt + bfUsed;
   const exempt = tax.rows.reduce((a, r) => a + r.exempt, 0);
   const taxable = tax.rows.reduce((a, r) => a + r.taxable, 0);
   if (gains < 1) return null;
   const pct = (v) => `${(v / gains) * 100}%`;
   const steps = [
     { label: 'Gains', value: gains, from: 0, to: gains, cls: 'wf-gain' },
-    { label: 'Losses set off', value: -losses, from: gains - losses, to: gains, cls: 'wf-loss', hide: losses < 1 },
+    { label: bfUsed >= 1 ? 'Losses set off (incl. earlier years)' : 'Losses set off', value: -losses, from: gains - losses, to: gains, cls: 'wf-loss', hide: losses < 1 },
     { label: 'Tax-free (₹1.25L exemption)', value: -exempt, from: taxable, to: gains - losses, cls: 'wf-exempt', hide: exempt < 1 },
     { label: 'Taxable', value: taxable, from: 0, to: taxable, cls: 'wf-taxable' },
   ].filter((s) => !s.hide);
@@ -44,6 +45,42 @@ function Waterfall({ tax }) {
         <span className="num">{inr(tax.cess)}</span>
         <strong className="num">= {inr(tax.total)}</strong>
       </div>
+    </div>
+  );
+}
+
+// Losses carried forward from earlier ITRs (Sec 74): short-term can offset any gain, long-term only long-term
+function BroughtForward({ bf, setBf, tax }) {
+  const [open, setOpen] = useState(bf.st > 0 || bf.lt > 0);
+  const set = (k) => (e) => setBf({ ...bf, [k]: Math.max(0, parseFloat(e.target.value) || 0) });
+  const info = tax.broughtForward;
+  if (!open) {
+    return (
+      <button className="link-btn small" onClick={() => setOpen(true)}>
+        + Add losses brought forward from earlier years
+      </button>
+    );
+  }
+  return (
+    <div className="bf-form">
+      <div>
+        <strong>Losses brought forward</strong>
+        <p className="muted small">From the "losses to carry forward" in your previous ITRs (up to 8 years). Kept in this tab only.</p>
+      </div>
+      <label className="field">
+        Short-term (₹)
+        <input className="input" type="number" min="0" step="1" value={bf.st || ''} placeholder="0" onChange={set('st')} />
+      </label>
+      <label className="field">
+        Long-term (₹)
+        <input className="input" type="number" min="0" step="1" value={bf.lt || ''} placeholder="0" onChange={set('lt')} />
+      </label>
+      {info && (info.st > 0 || info.lt > 0) && (
+        <p className="small">
+          Used this year: <strong className="num">{inr(info.used)}</strong>
+          {info.left.st + info.left.lt >= 1 && <> · still to carry forward: <strong className="num">{inr(info.left.st + info.left.lt)}</strong></>}
+        </p>
+      )}
     </div>
   );
 }
@@ -104,7 +141,7 @@ function FundSales({ sales }) {
   );
 }
 
-export default function TaxReport({ model, tax, fy, setFy, warnings, goTo }) {
+export default function TaxReport({ model, tax, fy, setFy, warnings, goTo, bf, setBf }) {
   const [showTable, setShowTable] = useState(false);
   const [openFund, setOpenFund] = useState(null);
   const notes = useMemo(() => buildInsights(model, tax), [model, tax]);
@@ -182,6 +219,9 @@ export default function TaxReport({ model, tax, fy, setFy, warnings, goTo }) {
             </button>
           </div>
           <Waterfall tax={tax} />
+          <div style={{ marginTop: 14 }}>
+            <BroughtForward key={fy} bf={bf} setBf={setBf} tax={tax} />
+          </div>
           {showTable && (
             <div style={{ marginTop: 18 }}>
               <TaxTable tax={tax} />
