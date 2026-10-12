@@ -1,35 +1,34 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Header from './components/Header';
 import Upload, { Loading } from './components/Upload';
-import Overview from './components/Overview';
-import Realized from './components/Realized';
-import Holdings from './components/Holdings';
-import Planner from './components/Planner';
-import Report from './components/Report';
+import NavCards from './components/NavCards';
+import TaxReport from './components/TaxReport';
+import Portfolio from './components/Portfolio';
+import SaveTax from './components/SaveTax';
+import DownloadMenu from './components/DownloadMenu';
+import PrintReport from './components/PrintReport';
+import Drawer from './components/Drawer';
+import PrivacyLog from './components/PrivacyLog';
 import Assistant from './components/Assistant';
 import { startEngine, subscribeEngine, getEngineState, parseFile } from './lib/engine';
+import { startNetLog, subscribeNetLog, getNetLog } from './lib/netlog';
 import { resolveClasses } from './lib/classify';
 import { buildModel } from './lib/portfolio';
+import { buildActions } from './lib/actions';
 import { fetchNavs, fetchFmv2018 } from './lib/nav';
-import { fyLabel } from './lib/dates';
+import { shortFund } from './lib/format';
 import { usePersistentState } from './lib/storage';
 
 const SLABS = [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3];
-
-const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'realized', label: 'Realized gains' },
-  { id: 'holdings', label: 'Funds & holdings' },
-  { id: 'planner', label: 'Tax planner' },
-  { id: 'report', label: 'Export' },
-  { id: 'assistant', label: 'AI assistant ✦' },
-];
+let simSeq = 0;
 
 export default function App() {
   const engine = useSyncExternalStore(subscribeEngine, getEngineState);
+  const netlog = useSyncExternalStore(subscribeNetLog, getNetLog);
   const [theme, setTheme] = usePersistentState('theme', 'system');
   const [slab, setSlab] = usePersistentState('slab', 0.3);
   const [overrides, setOverrides] = usePersistentState('overrides', {});
+  const [autoNav, setAutoNav] = usePersistentState('autoNav', true);
   // Only scheme codes the user typed in are remembered; automatic matches are redone on every
   // fetch so an improved matcher (or a renamed scheme) is never shadowed by a stale guess.
   const [manualCodes, setManualCodes] = usePersistentState('manualSchemeCodes', {});
@@ -43,14 +42,16 @@ export default function App() {
   const [navStatus, setNavStatus] = useState({ loading: false, done: 0, total: 0, errors: {} });
   const [sims, setSims] = useState([]);
   const [fy, setFy] = useState(null);
-  const [tab, setTabState] = useState('overview');
-  const [aiOpened, setAiOpened] = useState(false);
-  const setTab = useCallback((t) => {
-    setTabState(t);
-    if (t === 'assistant') setAiOpened(true);
-  }, []);
+  const [view, setView] = useState('report');
+  const [askOpen, setAskOpen] = useState(false);
+  const [askMounted, setAskMounted] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const autoFetchedFor = useRef(null);
 
-  useEffect(() => startEngine(), []);
+  useEffect(() => {
+    startNetLog();
+    startEngine();
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -72,27 +73,31 @@ export default function App() {
       setNavStatus({ loading: false, done: 0, total: 0, errors: {} });
       setSims([]);
       setFy(null);
-      setTab('overview');
+      setView('report');
       setPhase('results');
     } catch (e) {
       setError(e.message);
       setPhase('upload');
     }
-  }, [setTab]);
+  }, []);
 
   const reset = () => {
     setRaw(null);
     setPhase('upload');
     setSims([]);
     setNavs({});
+    autoFetchedFor.current = null;
   };
 
   const classes = useMemo(() => (raw ? resolveClasses(raw.funds, overrides, navs) : {}), [raw, overrides, navs]);
   const model = useMemo(() => (raw ? buildModel({ raw, classes, navs, sims, slab }) : null), [raw, classes, navs, sims, slab]);
+  // Same data without what-if sales: the Save tax ideas are computed on this, so previews don't reshuffle them
+  const baseModel = useMemo(() => (raw ? buildModel({ raw, classes, navs, sims: [], slab }) : null), [raw, classes, navs, slab]);
+  const plan = useMemo(() => (baseModel ? buildActions(baseModel) : null), [baseModel]);
 
   // Default to the most recent FY that actually has sales
-  const activeFy = fy ?? (model ? model.realized.reduce((m, r) => Math.max(m, r.fy), -Infinity) : null);
-  const selectedFy = model && Number.isFinite(activeFy) ? activeFy : model?.currentFy;
+  const latestFy = model ? model.realized.reduce((m, r) => Math.max(m, r.fy), -Infinity) : null;
+  const selectedFy = fy ?? (Number.isFinite(latestFy) ? latestFy : model?.currentFy);
   const tax = useMemo(() => (model ? model.taxFor(selectedFy) : null), [model, selectedFy]);
 
   const setOverride = (fund, cls) =>
@@ -122,21 +127,31 @@ export default function App() {
   };
 
   const fetchLive = async (names) => {
-    // Held funds, plus fully-sold ones whose pre-2018 units need an FMV for past years' tax
-    const list = names ?? model.funds.filter((f) => f.units > 0 || model.needsFmv.includes(f.name)).map((f) => f.name);
+    // Every fund: held ones need prices, sold ones still benefit from the official AMFI category
+    const list = names ?? model.funds.map((f) => f.name);
     if (!list.length) return;
     setNavStatus({ loading: true, done: 0, total: list.length, errors: {} });
     try {
-      const { results, errors, via } = await fetchNavs(list, manualCodes, (done, total) =>
-        setNavStatus((s) => ({ ...s, done, total })),
-      );
+      const { results, errors, via } = await fetchNavs(list, manualCodes, (done, total) => setNavStatus((s) => ({ ...s, done, total })));
       const enriched = await withFmv(results);
       setNavs((n) => ({ ...n, ...enriched }));
-      setNavStatus({ loading: false, done: list.length, total: list.length, errors, via });
+      // Funds that are fully sold don't need a price, so don't nag about them
+      const heldNames = new Set(model.funds.filter((f) => f.units > 1e-6).map((f) => f.name));
+      const relevant = Object.fromEntries(Object.entries(errors).filter(([f]) => heldNames.has(f)));
+      setNavStatus({ loading: false, done: list.length, total: list.length, errors: relevant, via });
     } catch (e) {
       setNavStatus({ loading: false, done: 0, total: list.length, errors: Object.fromEntries(list.map((f) => [f, e.message])) });
     }
   };
+
+  // Prices load automatically: only public fund names leave the browser (see the privacy log)
+  useEffect(() => {
+    if (phase === 'results' && raw && autoNav && autoFetchedFor.current !== raw) {
+      autoFetchedFor.current = raw;
+      fetchLive();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, raw, autoNav]);
 
   const setSchemeCode = async (fund, code) => {
     setManualCodes((c) => ({ ...c, [fund]: code }));
@@ -151,11 +166,28 @@ export default function App() {
     });
   };
 
-  const unknownCount = model ? model.funds.filter((f) => f.assetClass === 'Unknown').length : 0;
+  const addSim = (s) => setSims((list) => [...list, { id: `manual-${++simSeq}`, action: 'manual', date: model.today, ...s }]);
+
+  const openAsk = () => {
+    setAskMounted(true);
+    setAskOpen(true);
+  };
+
+  const unknown = model ? model.funds.filter((f) => f.assetClass === 'Unknown') : [];
+  const held = model ? model.funds.filter((f) => f.units > 1e-6) : [];
+  const priced = held.filter((f) => f.value != null);
+  const worth = priced.length ? priced.reduce((a, f) => a + f.value, 0) : null;
+  const externalRequests = netlog.filter((e) => e.group !== 'app').length;
 
   return (
     <>
-      <Header theme={theme} setTheme={setTheme} onHome={phase === 'results' ? reset : undefined} />
+      <Header
+        theme={theme}
+        setTheme={setTheme}
+        onHome={phase === 'results' ? reset : undefined}
+        onPrivacy={() => setPrivacyOpen(true)}
+        requestCount={externalRequests}
+      />
       <main className="container">
         {phase === 'upload' && <Upload engine={engine} error={error} onFile={handleFile} />}
         {phase === 'loading' && <Loading engine={engine} kind={fileKind} fileName={fileName} />}
@@ -163,25 +195,14 @@ export default function App() {
           <>
             <div className="toolbar no-print">
               <div className="toolbar-title">
-                <h1>Capital gains · {fyLabel(selectedFy)}</h1>
+                <h1>{fileName}</h1>
                 <p>
-                  {fileName} · {raw.stats.rows} transactions · {model.funds.length} funds
+                  {raw.stats.rows} transactions · {model.funds.length} funds
                 </p>
               </div>
               <div className="toolbar-controls">
-                <label className="field">
-                  Financial year
-                  <select className="select" value={selectedFy} onChange={(e) => setFy(Number(e.target.value))}>
-                    {model.fys.map((y) => (
-                      <option key={y} value={y}>
-                        {fyLabel(y)}
-                        {y === model.currentFy ? ' (current)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  Your income slab
+                <label className="field inline">
+                  Income slab
                   <select className="select" value={slab} onChange={(e) => setSlab(parseFloat(e.target.value))}>
                     {SLABS.map((s) => (
                       <option key={s} value={s}>
@@ -190,45 +211,81 @@ export default function App() {
                     ))}
                   </select>
                 </label>
-                <button className="btn btn-ghost" onClick={reset}>
-                  New file
-                </button>
+                <DownloadMenu tax={tax} navs={navs} />
+                <button className="btn btn-ghost" onClick={openAsk}>✦ Ask</button>
+                <button className="btn btn-ghost" onClick={reset}>New file</button>
               </div>
             </div>
 
-            <nav className="tabs no-print" role="tablist">
-              {TABS.map((t) => (
-                <button key={t.id} role="tab" aria-selected={tab === t.id} className={`tab ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
-                  {t.label}
-                  {t.id === 'holdings' && unknownCount > 0 && <span className="tab-count">{unknownCount}</span>}
-                  {t.id === 'planner' && sims.length > 0 && <span className="tab-count">{sims.length}</span>}
-                </button>
-              ))}
-            </nav>
+            <NavCards
+              view={view}
+              setView={setView}
+              reportTax={tax}
+              worth={worth}
+              invested={held.reduce((a, f) => a + f.cost, 0)}
+              saveTotal={plan?.total}
+              navLoading={navStatus.loading}
+            />
 
-            {tab === 'overview' && <Overview model={model} tax={tax} warnings={raw.warnings} goTo={setTab} />}
-            {tab === 'realized' && <Realized model={model} tax={tax} />}
-            {tab === 'holdings' && (
-              <Holdings
-                model={model}
-                navStatus={navStatus}
-                onFetch={fetchLive}
-                onOverride={setOverride}
-                onNav={setManualNav}
-                onSchemeCode={setSchemeCode}
-              />
-            )}
-            {tab === 'planner' && <Planner model={model} sims={sims} setSims={setSims} onFetch={fetchLive} navStatus={navStatus} goTo={setTab} />}
-            {tab === 'report' && <Report model={model} tax={tax} navs={navs} />}
-            {/* Kept mounted so a loaded model and chat survive tab switches */}
-            {aiOpened && (
-              <div hidden={tab !== 'assistant'}>
-                <Assistant model={model} tax={tax} />
+            {unknown.length > 0 && !navStatus.loading && (
+              <div className="banner warn no-print">
+                <span>⚠️</span>
+                <div className="banner-body">
+                  <strong>{unknown.length === 1 ? '1 fund needs' : `${unknown.length} funds need`} a tax type</strong>
+                  {unknown.map((f) => (
+                    <div key={f.name} className="banner-row">
+                      <span>{shortFund(f.name)}</span>
+                      {['Equity', 'Debt', 'Other'].map((c) => (
+                        <button key={c} className="btn btn-ghost btn-sm" onClick={() => setOverride(f.name, c)}>{c}</button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
               </div>
+            )}
+
+            {sims.length > 0 && view !== 'save' && (
+              <div className="banner info no-print">
+                <span>🧪</span>
+                <div className="banner-body">
+                  <strong>Including {sims.length} what-if sale{sims.length > 1 ? 's' : ''}</strong> in this year's numbers.
+                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => setView('save')}>Review</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setSims([])}>Reset</button>
+              </div>
+            )}
+
+            <div className="no-print">
+              {view === 'report' && <TaxReport model={model} tax={tax} fy={selectedFy} setFy={setFy} warnings={raw.warnings} goTo={setView} />}
+              {view === 'portfolio' && (
+                <Portfolio
+                  model={model}
+                  navStatus={navStatus}
+                  autoNav={autoNav}
+                  setAutoNav={setAutoNav}
+                  onFetch={fetchLive}
+                  onOverride={setOverride}
+                  onNav={setManualNav}
+                  onSchemeCode={setSchemeCode}
+                  onAddSim={addSim}
+                />
+              )}
+              {view === 'save' && <SaveTax plan={plan} baseModel={baseModel} model={model} sims={sims} setSims={setSims} navStatus={navStatus} />}
+            </div>
+
+            <PrintReport model={model} tax={tax} />
+
+            {askMounted && (
+              <Drawer open={askOpen} onClose={() => setAskOpen(false)} title="✦ Ask about your taxes" wide>
+                <Assistant model={model} tax={tax} />
+              </Drawer>
             )}
           </>
         )}
       </main>
+      <Drawer open={privacyOpen} onClose={() => setPrivacyOpen(false)} title="🔒 Privacy log">
+        <PrivacyLog fileName={phase === 'results' ? fileName : null} />
+      </Drawer>
     </>
   );
 }

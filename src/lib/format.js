@@ -25,5 +25,5 @@ export const shortFund = (name) =>
   name
     .replace(/\s*[-–]?\s*(direct|regular)\s*(plan)?\s*[-–]?\s*(growth)?\s*(option)?$/i, '')
     .replace(/\s+(direct\s+)?growth$/i, '')
-    .replace(/\s+fund$/i, '')
+    .replace(/(?<!\bof)\s+fund$/i, '') // keep "Fund of Fund" intact
     .trim();

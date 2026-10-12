@@ -1,3 +1,5 @@
+import { addWorkerEntries } from './netlog';
+
 // Singleton wrapper around the Pyodide worker. The worker boots as soon as the page
 // loads so the ~10 MB Python runtime is usually ready by the time a file is chosen.
 let worker = null;
@@ -15,7 +17,9 @@ export function startEngine() {
   worker = new Worker('/worker.js');
   emit({ stage: 'runtime', detail: 'Starting the Python engine…' });
   worker.onmessage = ({ data }) => {
-    if (data.type === 'progress') {
+    if (data.type === 'net') {
+      addWorkerEntries(data.entries);
+    } else if (data.type === 'progress') {
       emit({ stage: data.stage, detail: data.detail, ready: state.ready || data.stage === 'ready' });
     } else if (data.type === 'boot-error') {
       emit({ bootError: data.error });

@@ -91,6 +91,19 @@ async function serverPost(path, body) {
   return json;
 }
 
+async function serverGet(path) {
+  let res;
+  try {
+    res = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(20_000) });
+  } catch (e) {
+    throw new ServerUnavailable(e.message);
+  }
+  const json = /json/.test(res.headers.get('content-type') ?? '') ? await res.json() : null;
+  if (!json || res.status === 404 || res.status === 405 || res.status >= 502) throw new ServerUnavailable(`HTTP ${res.status}`);
+  if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+  return json;
+}
+
 const fromServer = (s) => ({
   nav: s.nav,
   navDate: s.navDate,
@@ -115,9 +128,10 @@ async function fetchNavsFromServer(fundNames, known) {
       else errors[name] = 'No matching scheme found';
     }
   }
-  const list = [...new Set(Object.values(codes))];
+  // GET with a stable (sorted) URL so the browser can revalidate it with ETags: refreshes come back 304
+  const list = [...new Set(Object.values(codes))].sort((a, b) => a - b);
   const navs = {};
-  for (let i = 0; i < list.length; i += 100) Object.assign(navs, (await serverPost('/navs', { codes: list.slice(i, i + 100) })).navs);
+  for (let i = 0; i < list.length; i += 100) Object.assign(navs, (await serverGet(`/navs?codes=${list.slice(i, i + 100).join(',')}`)).navs);
   for (const [name, code] of Object.entries(codes)) {
     const s = navs[code];
     if (s?.nav) results[name] = fromServer(s);

@@ -96,6 +96,15 @@ export function buildModel({ raw, classes, navs, sims, slab }) {
       classDetail: classes[name]?.detail,
       lots: fundLots,
       units: sum('units'),
+      // Units that can be sold today: FIFO stops at the first locked lot (ELSS lock-in)
+      sellableUnits: (() => {
+        let u = 0;
+        for (const l of fundLots) {
+          if (l.locked) break;
+          u += l.units;
+        }
+        return u;
+      })(),
       cost: sum('cost'),
       value: hasNav ? sum('value') : null,
       gain: hasNav ? sum('gain') : null,

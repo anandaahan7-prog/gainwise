@@ -43,12 +43,13 @@ function corsHeaders(req) {
 }
 
 function send(req, res, status, data, { maxAge = 0 } = {}) {
+  // maxAge > 0: cache for that long; maxAge === 'revalidate': cache but check the ETag every time (304s)
   let body = Buffer.from(JSON.stringify(data));
   const headers = {
     ...corsHeaders(req),
     'Content-Type': 'application/json; charset=utf-8',
     'X-Content-Type-Options': 'nosniff',
-    'Cache-Control': maxAge ? `public, max-age=${maxAge}` : 'no-store',
+    'Cache-Control': maxAge === 'revalidate' ? 'no-cache' : maxAge ? `public, max-age=${maxAge}` : 'no-store',
   };
   if (status === 200 && req.method === 'GET') {
     // Conditional requests: identical responses cost the client only a 304
@@ -148,6 +149,12 @@ const routes = [
   ['POST', /^\/api\/match$/, async (req) => {
     requireData();
     return [200, { results: service.match(namesBody(await readJson(req))) }];
+  }],
+  // Cacheable form used by the app: the browser revalidates with If-None-Match and usually gets a 304
+  ['GET', /^\/api\/navs$/, (req, url) => {
+    requireData();
+    const codes = (url.searchParams.get('codes') ?? '').split(',').filter(Boolean);
+    return [200, { navs: service.latest(codesBody({ codes })) }, 'revalidate'];
   }],
   ['POST', /^\/api\/navs$/, async (req) => {
     requireData();

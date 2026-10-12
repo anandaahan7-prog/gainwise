@@ -4,6 +4,18 @@ importScripts("https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js");
 
 const progress = (stage, detail) => self.postMessage({ type: "progress", stage, detail });
 
+// Report this worker's own network requests (Python runtime and packages) to the app's privacy log
+if (typeof PerformanceObserver !== "undefined") {
+  new PerformanceObserver((list) => {
+    const entries = list.getEntries().map((e) => ({
+      name: e.name, startTime: e.startTime, duration: e.duration, initiatorType: e.initiatorType,
+      transferSize: e.transferSize, encodedBodySize: e.encodedBodySize, decodedBodySize: e.decodedBodySize,
+      responseStatus: e.responseStatus, timeOrigin: performance.timeOrigin,
+    }));
+    self.postMessage({ type: "net", entries });
+  }).observe({ type: "resource", buffered: true });
+}
+
 const PYTHON_ENGINE = `
 import io, csv, json, re
 import pandas as pd

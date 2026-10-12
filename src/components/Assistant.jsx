@@ -69,32 +69,29 @@ export default function Assistant({ model, tax }) {
 
   const stop = () => engineRef.current?.interruptGenerate();
 
-  if (gpu === null) return <section className="panel"><div className="empty"><span className="spinner" /> Checking for WebGPU…</div></section>;
+  if (gpu === null) return <div className="empty"><span className="spinner" /> Checking for WebGPU…</div>;
 
   return (
-    <div className="stack">
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <h2>✦ Private AI tax assistant</h2>
-            <p>
-              A small language model runs on your GPU inside this tab via WebLLM. It reads a summary of the numbers on this page; your
-              questions and data are never sent anywhere. The model weights download once and are cached.
-            </p>
-          </div>
+    <div className="assistant">
+        <p className="muted small" style={{ marginBottom: 12 }}>
+          A small language model runs on your GPU inside this tab (WebLLM). It reads a summary of your numbers; your questions
+          and data are never sent anywhere. The model downloads once and is cached.
           {status === 'ready' && (
-            <button className="btn btn-ghost btn-sm" onClick={() => setShowContext((s) => !s)}>
-              {showContext ? 'Hide' : 'Show'} what the AI sees
-            </button>
+            <>
+              {' '}
+              <button className="link-btn" onClick={() => setShowContext((s) => !s)}>
+                {showContext ? 'Hide' : 'Show'} what the AI sees
+              </button>
+            </>
           )}
-        </div>
+        </p>
 
         {!gpu.ok && (
           <div className="alert warn">
             <span className="alert-icon">🖥️</span>
             <div>
               <strong>On-device AI isn't available here</strong>
-              <p>{gpu.reason} The Insights panel on the Overview tab still gives you rule-based tips.</p>
+              <p>{gpu.reason} The Tax report notes and the Save tax screen still work without it.</p>
             </div>
           </div>
         )}
@@ -197,7 +194,6 @@ export default function Assistant({ model, tax }) {
             </p>
           </div>
         )}
-      </section>
     </div>
   );
 }
